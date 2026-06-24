@@ -1,6 +1,29 @@
-# Playwright Test Agent
+# Playwright Agent — Agentic AI Test Automation
 
-A modular Playwright automation framework that runs structured test suites, generates an HTML report with pass/fail filtering, and posts results to a Google Chat space via webhook.
+An agentic AI test automation system built with Playwright. Instead of fixed click-by-click scripts, the agent **observes** the current page state, **thinks** about what to do next, and **acts** — looping until the goal is complete. Results are saved as JSON history, visualised in a two-tab dashboard (Today + Weekly), and posted to Google Chat after every run.
+
+---
+
+## What makes this "Agentic AI"
+
+| Traditional automation | This project |
+|---|---|
+| Fixed script: step 1 → step 2 → step 3 | Goal-driven: *"log in and check all checkboxes"* |
+| Breaks if page structure changes | Adapts by re-reading page state every step |
+| You write every click | Agent decides what to click based on context |
+| No memory between steps | Tracks a `done[]` list to avoid repeating actions |
+
+The agent runs a **3-step loop**:
+
+```
+OBSERVE  →  THINK  →  ACT  →  (repeat until done)
+```
+
+- **OBSERVE** — scans the live browser page and returns a structured snapshot (URL, inputs, buttons, flash messages)
+- **THINK** — given the goal and what's been done so far, decides the single best next action
+- **ACT** — executes that action on the real browser (navigate, fill, click, hover, select...)
+
+This is the same pattern used by AI browser agents (AutoGPT, Claude Computer Use) — built here from scratch using Playwright as the "hands."
 
 ---
 
@@ -8,58 +31,235 @@ A modular Playwright automation framework that runs structured test suites, gene
 
 ```
 playwright-agent/
+│
 ├── src/
-│   ├── index.ts          # Entry point — runs all suites in order
-│   ├── config.ts         # ✏️  Environment config (URL, credentials, headless, webhook)
-│   ├── test-plan.ts      # ✏️  Test metadata (labels, types, descriptions)
-│   ├── tests.ts          # ✏️  Actual test suite functions
-│   ├── types.ts          # Shared TypeScript types
-│   ├── state.ts          # Shared state + report/startSuite helpers
-│   └── reporter.ts       # HTML report generator + Google Chat sender
+│   ├── agent.ts          ← THE AGENT — observe → think → act loop
+│   ├── index.ts          ← Main runner — orchestrates all 10 test suites
+│   ├── tests.ts          ← Individual test suite implementations
+│   ├── test-plan.ts      ← Test metadata (labels, types, descriptions)
+│   ├── reporter.ts       ← Saves HTML report, JSON history, Google Chat card
+│   ├── state.ts          ← In-memory pass/fail tracker during a run
+│   ├── config.ts         ← URL, credentials, settings
+│   └── types.ts          ← TypeScript type definitions
+│
+├── scripts/
+│   └── generate-dashboard.js   ← Reads JSON history → builds dashboard HTML
+│
+├── tests/
+│   └── login.spec.ts           ← Standard Playwright test file
+│
 ├── reports/
-│   └── report.html       # Generated after each run
-└── README.md
+│   ├── history/                ← One JSON file per run (gitignored, lives on gh-pages)
+│   ├── report.html             ← Latest single-run HTML report
+│   └── dashboard.html          ← Full dashboard (generated, not committed)
+│
+├── .github/
+│   └── workflows/
+│       └── playwright-report.yml   ← GitHub Actions CI/CD pipeline
+│
+├── .claude/
+│   └── commands/
+│       └── run-playwright.md       ← Claude Code skill (slash command)
+│
+├── package.json
+├── playwright.config.ts
+└── .gitignore
 ```
-
-### What to change vs. what to leave alone
-
-| File | When to change |
-|---|---|
-| `config.ts` | Switching environments, credentials, or webhook URL |
-| `test-plan.ts` | Adding, removing, or updating test descriptions |
-| `tests.ts` | Adding or modifying test logic |
-| `index.ts` | Adding a new suite to the run order |
-| `types.ts` | Never (unless extending the data model) |
-| `state.ts` | Never (shared infrastructure) |
-| `reporter.ts` | Never (HTML/GChat reporting infrastructure) |
 
 ---
 
-## Prerequisites
+## The Agent — `src/agent.ts`
 
-- Node.js 18+
-- Playwright browsers installed
+The core agentic piece. Runs the observe → think → act loop for any goal expressed in plain English.
+
+### How it works
+
+```typescript
+// 1. OBSERVE — read the live page
+const pageState = await observe(page);
+// Returns: { url, inputs, buttons, flashMsg, ... }
+
+// 2. THINK — decide the next action
+const action = think(goal, pageState, done);
+// Returns: { type: "click", selector: 'button[type="submit"]', description: "Submit login form" }
+
+// 3. ACT — execute it
+await act(page, action);
+
+// Repeat until action.type === "done"
+```
+
+### Running the agent
+
+```bash
+npx ts-node src/agent.ts
+```
+
+The agent navigates to the target site, logs in, checks checkboxes, selects a dropdown option, and logs out — all driven by a single goal string, no hardcoded selectors in the loop.
+
+---
+
+## The Main Runner — `src/index.ts`
+
+Runs 10 structured test suites in sequence using explicit Playwright actions. Each suite calls `report()` to record checks, then saves results as HTML + JSON and sends a Google Chat notification.
+
+```bash
+npm start
+```
+
+### Test suites
+
+| # | Suite | Checks | Types |
+|---|---|---|---|
+| 1 | Valid Login & Logout | 4 | positive |
+| 2 | Invalid Login Attempts | 3 | negative, edge |
+| 3 | Checkboxes | 3 | positive, negative |
+| 4 | Dropdown | 2 | positive |
+| 5 | JavaScript Alerts | 4 | positive, negative, edge |
+| 6 | Add / Remove Elements | 2 | positive, negative |
+| 7 | Hovers | 4 | positive |
+| 8 | Dynamic Loading | 1 | edge |
+| 9 | Broken Images | 1 | edge |
+| 10 | Key Presses | 2 | positive, edge |
+| **Total** | | **26** | |
+
+### Check types
+
+| Type | Symbol | Meaning |
+|---|---|---|
+| `positive` | `[+]` | Happy path — the feature works as expected |
+| `negative` | `[-]` | Failure path — invalid input is rejected |
+| `edge` | `[~]` | Boundary case or unusual input |
+
+---
+
+## The Dashboard
+
+After every run, results are saved as a timestamped JSON file in `reports/history/`. The dashboard generator reads all history files and produces a self-contained HTML report with two tabs.
+
+### Today tab
+- Giant pass rate percentage (counts up on load)
+- Passed / Failed / Total / Suites stat chips
+- Filter bar: All / Positive / Negative / Edge
+- Expandable suite accordion — failing suites auto-open
+- `≈ flaky` badge on any check that has failed in this session but passed before
+
+### Weekly tab
+- Stats: runs this week, avg pass rate, best run, most failures, flaky suite count
+- **Flaky Alerts section** — lists suites with intermittent failures, shows their run-by-run pattern (✓ ✗ ✓ ✗), failure rate, and trend (stabilising ↑ / recently failing / intermittent)
+- **Pass rate trend chart** — animated bar chart, last 20 runs, colour-coded by health
+- **Suite failure heatmap** — grid of coloured cells, one per suite per run; cells fade in on load
+
+### Flaky test detection
+
+A test is **flaky** if it has passed in some runs and failed in others within the same week — not consistently broken, but unreliable. The dashboard distinguishes:
+
+- 🔴 All fails → **broken** — something is definitely wrong
+- 🟠 Mix of pass/fail → **flaky** — intermittent, harder to debug
+- 🟢 All pass → **stable**
+
+### Running locally
+
+```bash
+npm start            # run tests + save JSON
+npm run dashboard    # regenerate dashboard from history
+npm run report       # both together
+open reports/dashboard.html
+```
+
+---
+
+## The Skill — `.claude/commands/run-playwright.md`
+
+A **Claude Code skill** is a markdown file that teaches Claude how to perform a specific task. When you type `/run-playwright` in Claude Code, it reads this file and follows the instructions automatically — runs the tests, waits for completion, and reports results.
+
+```markdown
+---
+description: Run Playwright login/logout automation without an API key
+---
+
+Run the Playwright test suite.
+1. Use the Bash tool to run: npx ts-node src/index.ts
+2. Wait for it to complete
+3. Report the output — suite results, pass/fail counts, and any errors
+```
+
+Skills live in `.claude/commands/` — create as many as you want for any repeating task.
+
+---
+
+## Reporting pipeline
+
+```
+npm start
+    │
+    ├── Runs all 10 test suites
+    ├── state.ts tracks pass/fail in memory
+    └── reporter.ts saves:
+          ├── reports/report.html              ← single-run HTML report
+          ├── reports/history/TIMESTAMP.json   ← permanent record
+          └── Google Chat card (if webhook set)
+
+npm run dashboard
+    │
+    └── scripts/generate-dashboard.js
+          reads all history JSONs
+          detects flaky suites & checks
+          generates reports/dashboard.html
+```
+
+---
+
+## GitHub Actions — CI/CD
+
+The workflow in `.github/workflows/playwright-report.yml` runs automatically on every push to `main` and on a weekday schedule (Mon–Fri 9 AM UTC).
+
+### What it does
+
+1. Checks out the source code
+2. Restores previous history from the `gh-pages` branch
+3. Installs dependencies and Playwright browsers
+4. Runs the full test suite
+5. Copies the new JSON result into the history
+6. Generates the dashboard
+7. Pushes everything to the `gh-pages` branch
+
+### GitHub Pages
+
+Once the `gh-pages` branch exists, enable Pages in **Settings → Pages → Branch: gh-pages** and the dashboard will be live at:
+
+```
+https://nehanivalkar.github.io/playwright-agent/
+```
+
+### Secrets
+
+| Secret | Purpose |
+|---|---|
+| `GCHAT_WEBHOOK` | Google Chat webhook URL for notifications (optional) |
+
+---
+
+## Setup
 
 ```bash
 npm install
 npx playwright install chromium
 ```
 
----
-
-## Running Tests
+### Run tests
 
 ```bash
-npx ts-node src/index.ts
+npm start
 ```
 
-With Google Chat reporting:
+### Run with Google Chat notifications
 
 ```bash
-GCHAT_WEBHOOK="https://chat.googleapis.com/v1/spaces/..." npx ts-node src/index.ts
+GCHAT_WEBHOOK="https://chat.googleapis.com/v1/spaces/..." npm start
 ```
 
-To avoid setting the webhook every time, add it to your shell profile:
+### Add to shell profile to avoid setting every time
 
 ```bash
 echo 'export GCHAT_WEBHOOK="<your-webhook-url>"' >> ~/.zshrc
@@ -68,123 +268,26 @@ source ~/.zshrc
 
 ---
 
-## Configuration — `src/config.ts`
+## Adding a new test suite
 
-All environment-specific values live here. Change this file when switching projects or environments.
-
-```ts
-export const config = {
-  baseUrl:      "https://the-internet.herokuapp.com",  // target app URL
-  username:     "tomsmith",                            // login username
-  password:     "SuperSecretPassword!",                // login password
-  headless:     false,                                 // true = no browser window
-  reportsDir:   "reports",                             // where report.html is saved
-  gchatWebhook: process.env.GCHAT_WEBHOOK ?? "",       // Google Chat webhook URL
-};
-```
-
----
-
-## Test Plan — `src/test-plan.ts`
-
-Defines the metadata for every check: its label, type, and a plain-English description of what it verifies. This is printed to the console before execution and appears in the HTML report and Google Chat card.
-
-### Check types
-
-| Type | Symbol | Meaning |
-|---|---|---|
-| `positive` | `[+]` | Happy path — the feature works as expected |
-| `negative` | `[-]` | Failure path — invalid input is rejected |
-| `edge` | `[~]` | Boundary or unusual input that needs special handling |
-
-### Example entry
-
-```ts
-"Valid Login & Logout": [
-  {
-    label:       "Login redirects to /secure",
-    type:        "positive",
-    description: "Valid credentials should land on the secure page",
-  },
-  ...
-]
-```
-
-### Adding a new suite to the plan
-
-Add a new key to `TEST_PLAN` with the same name you'll pass to `startSuite()` in `tests.ts`:
-
-```ts
-"My New Suite": [
-  { label: "Something works",    type: "positive", description: "It should do X" },
-  { label: "Something is blocked", type: "negative", description: "It should reject Y" },
-],
-```
-
----
-
-## Tests — `src/tests.ts`
-
-Each test suite is an `async function` that receives a Playwright `Page`. Use `startSuite()` to register the suite and `report()` to record each check.
-
-### `startSuite(name)`
-
-Registers a new suite. The `name` must exactly match the key in `TEST_PLAN`.
-
-```ts
-startSuite("My New Suite");
-```
-
-### `report(label, type, passed, detail?)`
-
-Records a single check result.
-
-| Param | Type | Description |
-|---|---|---|
-| `label` | `string` | Must match the label in `TEST_PLAN` |
-| `type` | `"positive" \| "negative" \| "edge"` | Check category |
-| `passed` | `boolean` | Whether the check passed |
-| `detail` | `string` (optional) | Extra info shown in the report (e.g. `"2/3 broken"`) |
-
-### Example suite
-
-```ts
-export async function testMyFeature(page: Page) {
-  startSuite("My New Suite");
-  await page.goto(`${config.baseUrl}/my-page`);
-
-  const heading = await page.locator("h1").textContent();
-  report("Page heading is visible", "positive", !!heading);
-
-  await page.fill("#search", "");
-  await page.click('button[type="submit"]');
-  await page.waitForSelector(".error");
-  report("Empty search shows error", "negative", true);
-}
-```
-
----
-
-## Adding a New Suite — End to End
-
-**1. Add metadata to `test-plan.ts`:**
-```ts
+**1. Add metadata to `src/test-plan.ts`:**
+```typescript
 "Search": [
-  { label: "Search returns results",   type: "positive", description: "A valid query should return at least one result" },
-  { label: "Empty search shows error", type: "negative", description: "Submitting blank search should show a validation error" },
+  { label: "Search returns results",   type: "positive", description: "A valid query returns at least one result" },
+  { label: "Empty search shows error", type: "negative", description: "Blank search shows a validation error" },
 ],
 ```
 
-**2. Write the function in `tests.ts`:**
-```ts
+**2. Write the function in `src/tests.ts`:**
+```typescript
 export async function testSearch(page: Page) {
   startSuite("Search");
-  await page.goto(`${config.baseUrl}/search`);
+  await page.goto(`${BASE}/search`);
 
   await page.fill("#query", "playwright");
   await page.click('button[type="submit"]');
-  await page.waitForSelector(".results");
-  report("Search returns results", "positive", (await page.locator(".result-item").count()) > 0);
+  report("Search returns results", "positive",
+    (await page.locator(".result-item").count()) > 0);
 
   await page.fill("#query", "");
   await page.click('button[type="submit"]');
@@ -193,72 +296,25 @@ export async function testSearch(page: Page) {
 }
 ```
 
-**3. Register it in `index.ts`:**
-```ts
+**3. Register it in `src/index.ts`:**
+```typescript
 import { testSearch } from "./tests";
-
 // inside run():
 await testSearch(page);
 ```
 
-That's it — the suite will appear in the console output, HTML report, and Google Chat card automatically.
+The suite will automatically appear in the console output, HTML report, Google Chat card, and dashboard.
 
 ---
 
-## HTML Report — `reports/report.html`
+## What to change vs. what to leave alone
 
-Generated after every run. Open it with:
-
-```bash
-open reports/report.html
-```
-
-### Features
-
-- **Overall status badge** — PASSED / FAILED
-- **Summary cards** — passed, failed, total, pass rate
-- **Filter bar** — click `Positive`, `Negative`, or `Edge` to show only those checks across all suites; click `All` to reset
-- **Collapsible suites** — click a suite header to expand or collapse its checks
-- **Per-check detail** — label, description, type badge, and PASS/FAIL result
-
----
-
-## Google Chat Report
-
-When `GCHAT_WEBHOOK` is set, a formatted card is posted to your Google Chat space after every run.
-
-### Card contents
-
-- Header with overall status and check/suite counts
-- Summary row: passed / failed / total / pass rate
-- Type breakdown: `[+]` positive / `[-]` negative / `[~]` edge counts
-- One collapsible section per suite showing each check with its type and result
-
-### Setting up a webhook
-
-1. Open Google Chat → go to your space → click the space name at the top
-2. Click **Apps & Integrations** → **Add webhooks**
-3. Name it (e.g. `Playwright Bot`) and click **Save**
-4. Copy the URL and export it:
-
-```bash
-export GCHAT_WEBHOOK="https://chat.googleapis.com/v1/spaces/XXXXX/messages?key=...&token=..."
-```
-
----
-
-## Current Test Suites
-
-| # | Suite | Checks | Positive | Negative | Edge |
-|---|---|---|---|---|---|
-| 1 | Valid Login & Logout | 4 | 4 | 0 | 0 |
-| 2 | Invalid Login Attempts | 3 | 0 | 2 | 1 |
-| 3 | Checkboxes | 3 | 2 | 1 | 0 |
-| 4 | Dropdown | 2 | 2 | 0 | 0 |
-| 5 | JavaScript Alerts | 4 | 2 | 1 | 1 |
-| 6 | Add / Remove Elements | 2 | 1 | 1 | 0 |
-| 7 | Hovers | 4 | 4 | 0 | 0 |
-| 8 | Dynamic Loading | 1 | 0 | 0 | 1 |
-| 9 | Broken Images | 1 | 0 | 0 | 1 |
-| 10 | Key Presses | 2 | 1 | 0 | 1 |
-| **Total** | | **26** | **16** | **5** | **5** |
+| File | When to change |
+|---|---|
+| `config.ts` | Switching target URL, credentials, or webhook |
+| `test-plan.ts` | Adding or updating test descriptions |
+| `tests.ts` | Adding or modifying test logic |
+| `index.ts` | Adding a new suite to the run order |
+| `scripts/generate-dashboard.js` | Changing dashboard layout or detection logic |
+| `state.ts` | Never |
+| `types.ts` | Never unless extending the data model |
