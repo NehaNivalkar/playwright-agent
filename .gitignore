@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.js.map
+
+# Playwright artifacts
+test-results/
+playwright-report/
+
+# Generated reports (served from gh-pages, not committed to main)
+reports/history/
+reports/dashboard.html
+
+# Env
+.env
+.env.local

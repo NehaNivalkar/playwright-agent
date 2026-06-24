@@ -1,0 +1,28 @@
+{
+  "name": "playwright-agent",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "ts-node src/index.ts",
+    "agent": "ts-node src/agent.ts",
+    "test": "playwright test",
+    "dashboard": "node scripts/generate-dashboard.js",
+    "report": "npm start && npm run dashboard"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^25.9.3",
+    "playwright": "^1.60.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
+    "openai": "^6.42.0"
+  }
+}

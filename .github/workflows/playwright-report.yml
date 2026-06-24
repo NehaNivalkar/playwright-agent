@@ -1,0 +1,87 @@
+name: Playwright Tests
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  schedule:
+    # Run Mon–Fri at 9 AM UTC
+    - cron: '0 9 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test-and-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout source code ──────────────────────────────────────────────
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      # ── 2. Restore previous history from gh-pages branch ────────────────────
+      - name: Restore history from gh-pages
+        run: |
+          mkdir -p deploy/history
+          git fetch origin gh-pages:gh-pages 2>/dev/null || echo "gh-pages branch does not exist yet"
+          git archive gh-pages history/ 2>/dev/null | tar -x -C deploy/ 2>/dev/null || echo "No previous history found"
+
+      # ── 3. Node + deps ───────────────────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # ── 4. Run tests ─────────────────────────────────────────────────────────
+      - name: Run test suite
+        run: npm start
+        env:
+          GCHAT_WEBHOOK: ${{ secrets.GCHAT_WEBHOOK }}
+        continue-on-error: true  # always generate the report even on failures
+
+      # ── 5. Stage new results + generate dashboard ────────────────────────────
+      - name: Stage results
+        run: |
+          mkdir -p deploy/history
+          cp reports/history/*.json deploy/history/ 2>/dev/null || echo "No JSON results to copy"
+
+      - name: Generate dashboard
+        run: node scripts/generate-dashboard.js deploy/history deploy/index.html
+
+      # ── 6. Push updated deploy/ to gh-pages branch ──────────────────────────
+      - name: Deploy to gh-pages
+        run: |
+          cd deploy
+
+          git init -b gh-pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Fetch existing gh-pages so we don't lose old history when force-pushing
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git fetch origin gh-pages 2>/dev/null && git reset --soft origin/gh-pages 2>/dev/null || true
+
+          git add -A
+          git diff --staged --quiet && echo "No changes to commit" || \
+            git commit -m "report: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          git push origin gh-pages --force
+
+      # ── 7. Report URL in summary ──────────────────────────────────────────────
+      - name: Print dashboard URL
+        run: |
+          REPO="${{ github.repository }}"
+          OWNER="${REPO%%/*}"
+          NAME="${REPO##*/}"
+          echo "### 📊 Dashboard" >> $GITHUB_STEP_SUMMARY
+          echo "https://${OWNER}.github.io/${NAME}/" >> $GITHUB_STEP_SUMMARY
