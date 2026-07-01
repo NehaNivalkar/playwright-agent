@@ -422,6 +422,7 @@ function generateDashboard(latestRun, todayRuns, mRuns, allRuns) {
       border-bottom: 1px solid var(--border); align-items: center; flex-wrap: wrap;
     }
     .f-lbl { font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); margin-right: 0.2rem; }
+    .f-sep { width: 1px; height: 16px; background: var(--border); margin: 0 0.2rem; flex-shrink: 0; }
     .fbtn {
       font-family: inherit; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.04em;
       padding: 0.28rem 0.65rem; background: var(--surface); border: 1px solid var(--border);
@@ -433,6 +434,31 @@ function generateDashboard(latestRun, todayRuns, mRuns, allRuns) {
     .fbtn.fn  { background: rgba(242,78,78,0.1);   border-color: rgba(242,78,78,0.3);    color: var(--fail); }
     .fbtn.fe  { background: rgba(240,160,69,0.1);  border-color: rgba(240,160,69,0.3);   color: var(--edge); }
     .fbtn .cnt { opacity: 0.65; margin-left: 0.3em; }
+    /* status filter buttons */
+    .sbtn {
+      font-family: inherit; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.04em;
+      padding: 0.28rem 0.65rem; background: var(--surface); border: 1px solid var(--border);
+      color: var(--text-mid); border-radius: 2px; cursor: pointer; transition: all 0.12s;
+    }
+    .sbtn:hover { background: var(--surface-hi); color: var(--text); }
+    .sbtn.sa { background: rgba(124,111,232,0.1); border-color: rgba(124,111,232,0.35); color: var(--accent); }
+    .sbtn.sp { background: rgba(33,204,136,0.1);  border-color: rgba(33,204,136,0.3);   color: var(--pass); }
+    .sbtn.sf { background: rgba(242,78,78,0.1);   border-color: rgba(242,78,78,0.3);    color: var(--fail); }
+    /* suite search */
+    .suite-search {
+      font-family: inherit; font-size: 0.68rem; background: var(--surface);
+      border: 1px solid var(--border); color: var(--text); padding: 0.26rem 0.65rem;
+      border-radius: 2px; outline: none; width: 150px; transition: border-color 0.15s;
+    }
+    .suite-search::placeholder { color: var(--text-dim); }
+    .suite-search:focus { border-color: rgba(124,111,232,0.4); }
+    .clear-search {
+      font-family: inherit; font-size: 0.7rem; background: none; border: none;
+      color: var(--text-dim); cursor: pointer; padding: 0 0.2rem; line-height: 1;
+      display: none;
+    }
+    .clear-search.visible { display: inline; }
+    .clear-search:hover { color: var(--text); }
 
     /* ── Suite accordion ── */
     .suite-block.hidden-filter { display: none; }
@@ -618,11 +644,19 @@ function generateDashboard(latestRun, todayRuns, mRuns, allRuns) {
   </div>
 
   <div class="filter-bar">
-    <span class="f-lbl">filter</span>
+    <span class="f-lbl">type</span>
     <button class="fbtn fa" data-filter="all"      onclick="applyFilter('all')">all<span class="cnt">${todayTotal}</span></button>
     <button class="fbtn"    data-filter="positive" onclick="applyFilter('positive')">positive<span class="cnt">${cPos}</span></button>
     <button class="fbtn"    data-filter="negative" onclick="applyFilter('negative')">negative<span class="cnt">${cNeg}</span></button>
     <button class="fbtn"    data-filter="edge"     onclick="applyFilter('edge')">edge<span class="cnt">${cEdge}</span></button>
+    <span class="f-sep"></span>
+    <span class="f-lbl">status</span>
+    <button class="sbtn sa" data-status="all"  onclick="applyStatus('all')">all</button>
+    <button class="sbtn"    data-status="pass" onclick="applyStatus('pass')">✓ passed</button>
+    <button class="sbtn"    data-status="fail" onclick="applyStatus('fail')">✗ failed</button>
+    <span class="f-sep"></span>
+    <input  class="suite-search" id="suite-search" type="text" placeholder="search suites…" oninput="searchSuites(this.value)">
+    <button class="clear-search" id="clear-search" onclick="clearSearch()" title="Clear">✕</button>
   </div>
 
   <div id="suite-list">${buildSuiteBlocks(latestRun, flakyChecks)}</div>
@@ -785,22 +819,70 @@ function animateHeatmap() {
   });
 }
 
-/* ── Filter ── */
-var fMap = { all: 'fa', positive: 'fp', negative: 'fn', edge: 'fe' };
+/* ── Filters (type + status + search — all three combine) ── */
+var fMap           = { all: 'fa', positive: 'fp', negative: 'fn', edge: 'fe' };
+var activeType     = 'all';
+var activeStatus   = 'all';
+var activeSearch   = '';
+
 function applyFilter(type) {
-  document.querySelectorAll('.fbtn').forEach(function(b) { b.classList.remove('fa','fp','fn','fe'); });
+  activeType = type;
+  document.querySelectorAll('.fbtn[data-filter]').forEach(function(b) { b.classList.remove('fa','fp','fn','fe'); });
   var fb = document.querySelector('[data-filter="' + type + '"]');
   if (fb) fb.classList.add(fMap[type] || 'fa');
+  runFilters();
+}
+
+function applyStatus(status) {
+  activeStatus = status;
+  document.querySelectorAll('.sbtn').forEach(function(b) { b.classList.remove('sa','sp','sf'); });
+  var sb = document.querySelector('[data-status="' + status + '"]');
+  if (sb) sb.classList.add({ all: 'sa', pass: 'sp', fail: 'sf' }[status] || 'sa');
+  runFilters();
+}
+
+function searchSuites(val) {
+  activeSearch = val.toLowerCase().trim();
+  var clr = document.getElementById('clear-search');
+  if (clr) clr.classList.toggle('visible', activeSearch.length > 0);
+  runFilters();
+}
+
+function clearSearch() {
+  activeSearch = '';
+  var inp = document.getElementById('suite-search');
+  var clr = document.getElementById('clear-search');
+  if (inp) inp.value = '';
+  if (clr) clr.classList.remove('visible');
+  runFilters();
+}
+
+function runFilters() {
   document.querySelectorAll('.suite-block').forEach(function(block) {
+    var suiteName = (block.querySelector('.s-name') || {}).textContent || '';
+    var hasFail   = block.dataset.hasFail === 'true';
+
+    var statusOk = activeStatus === 'all' ||
+      (activeStatus === 'pass' && !hasFail) ||
+      (activeStatus === 'fail' &&  hasFail);
+    var searchOk = !activeSearch || suiteName.toLowerCase().includes(activeSearch);
+
+    if (!statusOk || !searchOk) {
+      block.classList.add('hidden-filter');
+      return;
+    }
+
     var rows = block.querySelectorAll('.check-row');
     var vis  = 0;
     rows.forEach(function(r) {
-      var m = type === 'all' || r.dataset.type === type;
+      var m = activeType === 'all' || r.dataset.type === activeType;
       r.classList.toggle('hidden-filter', !m);
       if (m) vis++;
     });
+
     block.classList.toggle('hidden-filter', vis === 0);
-    if (type !== 'all' && vis > 0) {
+
+    if (vis > 0 && (hasFail || activeType !== 'all' || activeStatus === 'fail')) {
       var body  = block.querySelector('.s-body');
       var arrow = block.querySelector('.s-arrow');
       if (body)  body.classList.add('open');
